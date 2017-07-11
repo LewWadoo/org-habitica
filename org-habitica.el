@@ -88,7 +88,7 @@
 (defcustom org-habitica-api-token nil
   "API token.")
 
-(defcustom org-habitica--id-property-name "HABITICA-ID"
+(defcustom org-habitica--id-property-name "HABITICA_ID"
   "Property id name of an org task.")
 
 (defconst org-habitica--score-direction-down "down"
@@ -384,11 +384,107 @@ The org task takes priority."
   "Search org-agenda for a TASK."
   )
 
-;;; -> Functions I need in my program
+
+;; formerly org-tags-view from org-agenda.el
+(defun org-habitica--find-tags (match)
+  "Get all headlines for all `org-agenda-files' with MATCH."
+  ;; (interactive "P")
+  ;; (if org-agenda-overriding-arguments
+  ;;     (setq todo-only (car org-agenda-overriding-arguments)
+  ;; 	    match (nth 1 org-agenda-overriding-arguments)))
+  (let* ((org-tags-match-list-sublevels
+	  org-tags-match-list-sublevels)
+	 (completion-ignore-case t)
+	 ;; (org--matcher-tags-todo-only todo-only)
+	 rtn rtnall files file pos matcher
+	 buffer)
+    (when (and (stringp match) (not (string-match "\\S-" match)))
+      (setq match nil))
+    (catch 'exit
+      ;; (if org-agenda-sticky
+      ;; 	  (setq org-agenda-buffer-name
+      ;; 		(if (stringp match)
+      ;; 		    (format "*Org Agenda(%s:%s)*"
+      ;; 			    (or org-keys (or (and todo-only "M") "m")) match)
+      ;; 		  (format "*Org Agenda(%s)*" (or (and todo-only "M") "m")))))
+      ;; Prepare agendas (and `org-tag-alist-for-agenda') before
+      ;; expanding tags within `org-make-tags-matcher'
+      ;; (org-agenda-prepare (concat "TAGS " match))
+      (setq matcher (org-make-tags-matcher match)
+	    match (car matcher)
+	    matcher (cdr matcher))
+      (org-compile-prefix-format 'tags)
+      (org-set-sorting-strategy 'tags)
+      (setq org-agenda-query-string match)
+      (setq org-agenda-redo-command
+	    (list 'org-tags-view
+		  ;; `(quote ,org--matcher-tags-todo-only)
+		  `(if current-prefix-arg nil ,org-agenda-query-string)))
+      (setq files (org-agenda-files nil 'ifmode)
+	    rtnall nil)
+      (while (setq file (pop files))
+	(catch 'nextfile
+	  (org-check-agenda-file file)
+	  (setq buffer (if (file-exists-p file)
+			   (org-get-agenda-file-buffer file)
+			 (error "No such file %s" file)))
+	  (if (not buffer)
+	      ;; If file does not exist, error message to agenda
+	      (setq rtn (list
+			 (format "No such org-file %s" file))
+		    rtnall (append rtnall rtn))
+	    (with-current-buffer buffer
+	      (unless (derived-mode-p 'org-mode)
+		(error "Agenda file %s is not in `org-mode'" file))
+	      (save-excursion
+		(save-restriction
+		  (if (eq buffer org-agenda-restrict)
+		      (narrow-to-region org-agenda-restrict-begin
+					org-agenda-restrict-end)
+		    (widen))
+		  (setq rtn (org-scan-tags 'agenda
+					   matcher
+					   ;; org--matcher-tags-todo-only))
+					   t))
+		  (setq rtnall (append rtnall rtn))))))))
+;;       (if org-agenda-overriding-header
+;; 	  (insert (org-add-props (copy-sequence org-agenda-overriding-header)
+;; 		      nil 'face 'org-agenda-structure) "\n")
+;; 	(insert "Headlines with TAGS match: ")
+;; 	(add-text-properties (point-min) (1- (point))
+;; 			     (list 'face 'org-agenda-structure
+;; 				   'short-heading
+;; 				   (concat "Match: " match)))
+;; 	(setq pos (point))
+;; 	(insert match "\n")
+;; 	(add-text-properties pos (1- (point)) (list 'face 'org-warning))
+;; 	(setq pos (point))
+;; 	(unless org-agenda-multi
+;; 	  (insert (substitute-command-keys
+;; 		   "Press `\\[universal-argument] \\[org-agenda-redo]' \
+;; to search again with new search string\n")))
+;; 	(add-text-properties pos (1- (point))
+;; 			     (list 'face 'org-agenda-structure)))
+;;       (org-agenda-mark-header-line (point-min))
+      (when rtnall
+	;; (org-agenda-finalize-entries rtnall 'tags)))))
+	rtnall))))
+      ;; (goto-char (point-min))
+      ;; (or org-agenda-multi (org-agenda-fit-window-to-buffer))
+      ;; (add-text-properties
+      ;;  (point-min) (point-max)
+      ;;  `(org-agenda-type tags
+      ;; 			 org-last-args (,org--matcher-tags-todo-only ,match)
+      ;; 			 org-redo-cmd ,org-agenda-redo-command
+      ;; 			 org-series-cmd ,org-cmd))
+      ;; (org-agenda-finalize)
+      ;; (setq buffer-read-only t))))
+
+
+;;; -> Functions from abrochard-habitica I need in my program
 
 (defun habitica--send-request (endpoint type data)
   "Base function to send request to the Habitica API.
-
 ENDPOINT can be found in the habitica doc.
 TYPE is the type of HTTP request (GET, POST, DELETE)
 DATA is the form to be sent as x-www-form-urlencoded."
@@ -414,25 +510,33 @@ DATA is the form to be sent as x-www-form-urlencoded."
 
 (defun habitica--parse-tasks (tasks order)
   "Parse the tasks to 'org-mode' format.
-
 TASKS is the list of tasks from the JSON response
 ORDER is the ordered list of ids to print the task in."
   (dolist (id (append order nil))
     (dolist (value (append tasks nil))
+      ;; Get a task from loop
       (if (equal (assoc-default 'id value) id)
-          (habitica--insert-task value)))))
+	  ;; Search for a task ID in org-agenda
+	  (let* ((found (org-habitica--find-tags (concat org-habitica--id-property-name "=" "" id "")))
+		 notfoundall)
+	    (if found
+		(habitica--insert-task value)))))))
+
+  ;; 	    (setq foundall (append found))
+  ;; 	    (setq notfoundall (append notfoundnall id))))))
+  ;; foundall)
 
 ;;;###autoload
 (defun habitica-tasks ()
   "Main function to summon the habitica buffer."
-  (interactive)
+  ;; (interactive)
   ;; (if (or (not habitica-uid) (not habitica-token))
   ;;     (call-interactively 'habitica-login))
   (switch-to-buffer "*habitica*")
   (delete-region (point-min) (point-max))
   (org-mode)
   ;; (habitica-mode)
-  (insert "#+TITLE: Habitica Dashboard\n\n")
+  ;; (insert "#+TITLE: Habitica Dashboard\n\n")
   ;; (habitica--get-tags)
   (let ((habitica-data (habitica--get-tasks))
         (habitica-profile (habitica--get-profile)))
@@ -450,16 +554,6 @@ ORDER is the ordered list of ids to print the task in."
   (org-content))))
 
 
-(defun habitica--parse-todos (tasks order)
-  "Parse the tasks to 'org-mode' format.
-
-TASKS is the list of tasks from the JSON response
-ORDER is the ordered list of ids to print the task in."
-  (dolist (id (append order nil))
-    (dolist (value (append tasks nil))
-      (if (equal (assoc-default 'id value) id)
-          (habitica--insert-task value)))))
-
 ;; Loop through all the tasks
 (defun habitica-sync-todos ()
   "Sync all todos from Habitica to org."
@@ -470,9 +564,6 @@ ORDER is the ordered list of ids to print the task in."
       (habitica--parse-todos habitica-data (assoc-default 'todos tasksOrder))
 )))
 
-;; Get a task from loop
-
-;; Search for a task ID in org-agenda
 
 ;; If not found
 
@@ -519,6 +610,7 @@ TASK is the parsed JSON response."
 
 
 ;;; <- Functions from abrochard emacs-habitica I need in my program
+
 
 
 (provide 'org-habitica)
