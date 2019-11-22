@@ -70,6 +70,10 @@
 ;; C-c C-x o ­ enable org-habitica
 ;; C-u C-c C-x o ­ disable org-habitica
 
+(defvar org-habitica-request-method-get "GET")
+(defvar org-habitica-request-method-post "POST")
+(defvar org-habitica-request-method-delete "DELETE")
+
 (defcustom org-habitica--neither-todo-nor-done-keywords '("WAIT" "MAYBE" "HOLD" "CANCELED" "FAILED" "DELEGATED" nil)
   "Org states which delete a task in Habitica when switching to.")
 
@@ -79,6 +83,11 @@
 (defvar org-habitica--buffer nil
   "Current org buffer.")
 
+(defvar org-habitica-difficulty (list (cons 0.1 "trivial") (cons 1 "easy") (cons 1.5 "medium") (cons 2 "hard"))
+  "Assoc list of priority/difficulty.")
+
+;; (defcustom org-habitica--api-url "http://habitica.com/api/v3"
+;;   "API url.")
 (defcustom org-habitica--api-url "https://habitica.com/api/v3"
   "API url.")
 
@@ -99,20 +108,12 @@ In Habitica it means that a todo task's state turns from DONE to TODO.")
   "Positive score direction of a task.
 In Habitica it means that a todo task's state turns from TODO to DONE.")
 
+;; (require 'request)
+
 ;;;###autoload
 (defun org-habitica-check-access ()
   "Check Habitica's API status."
-  (let ((url-request-method "GET")
-	(url (concat org-habitica--api-url "/status"))
-	(url-request-extra-headers
-	 `(
-	   ("Content-Type" . "application/json"))))
-    (url-retrieve url 'org-habitica--format-response))
-  ;; TODO: return an appropriate string of login status
-  (if (org-habitica--was-response-successful-p org-habitica--response)
-      (message "Connection to Habitica is up")))
-    ;; (message "Cannot connect to Habitica")))
-
+  (message "Connection to Habitica is %s" (org-habitica--get-from-data 'status (org-habitica--format-response-from-buffer-if-success (org-habitica--send-request org-habitica-request-method-get "/status")))))
 
 (defun org-habitica--entry-is-neither-todo-nor-done-p (state)
   "Check whether the task was discarded according to its STATE."
@@ -121,24 +122,25 @@ In Habitica it means that a todo task's state turns from TODO to DONE.")
 ;; (defun get-list-of-org-todo-keywords ()
 ;;   "Get alist of org-todo-keywords as keys with values."
   
-(defun org-habitica--get-from-data (symbol data)
-  "Extract SYMBOL from returned request response DATA."
-  (cdr (assoc symbol (cdr (assoc 'data data)))))
+(defun org-habitica--get-data-from-response (response)
+  "Extract DATA from returned request RESPONSE."
+  (cdr (assoc 'data response)))
 
-(defun org-habitica--get-id-from-org ()
+(defun org-habitica--get-from-data (symbol response)
+  "Extract SYMBOL from returned request RESPONSE."
+  (cdr (assoc symbol (org-habitica--get-data-from-response response))))
+
+(defun org-habitica--get-id-from-org (buffer)
   "Get id property of an org task."
   (save-current-buffer
-    (set-buffer org-habitica--buffer)
-    ;; (setq org-habitica--current-task-id (org-entry-get (point) org-habitica--id-property-name))
+    (set-buffer buffer)
     (org-entry-get (point) org-habitica--id-property-name)))
 
 (defun org-habitica--set-id (id)
-  "Set ID as a property of org task."
+  "Set ID as a property of an org task."
   (save-current-buffer
     (set-buffer org-habitica--buffer)
-    ;; (message "property %s is set to %s" org-habitica--id-property-name id)
     (org-set-property org-habitica--id-property-name id)))
-
 
 (defun org-habitica--was-response-successful-p (response)
   "Return t if the RESPONSE was successful."
@@ -151,168 +153,298 @@ In Habitica it means that a todo task's state turns from TODO to DONE.")
   (unless (org-habitica--was-response-successful-p response)
     (assoc-default 'error response)))
 
-(defun org-habitica--format-response (buffer)
+(defun org-habitica--format-status-buffer (status)
+;; (defun format-response-from-habitica (status)
+;;   "Format STATUS as a unicode list."
+  ;; (save-current-buffer
+  ;;   (set-buffer response-buffer)  
+  ;; (message "in org-habitica--format-status-buffer (status). status: %s" status)
+  ;; (message "current buffer: %s" (current-buffer))
+  (message "debug! Buffer: %s" (buffer-substring-no-properties (point-min) (point-max)))
+;  (read-buffer (current-buffer))
+  ;; (goto-char url-http-end-of-headers)
+  ;; ;; (encode-coding-region (point) (point-max) 'iso-8859-1)
+  ;; ;; (decode-coding-region (point) (point-max) 'utf-8)
+  ;; (let ((json-object-type 'alist)
+  ;; 	(json-key-type 'symbol)
+  ;; 	(json-array-type 'list))
+  ;;   (setq habitica-response (json-read))
+  ;;   (message "habitica-response: %s" habitica-response)
+  ;;   )
+  (kill-buffer (current-buffer))
+  )
+
+;; (defun org-habitica--format-response-from-buffer-without-headers (buffer)
+;;   "Format BUFFER data from json without headers to a list."
+;;   (when (not (bufferp buffer))
+;;     (setq buffer (current-buffer)))
+;;   (with-current-buffer buffer
+;;     (goto-char url-http-end-of-headers)
+;;     (encode-coding-region (point) (point-max) 'iso-8859-1)
+;;     (decode-coding-region (point) (point-max) 'utf-8)
+;;     (let ((json-object-type 'alist)
+;; 	  (json-key-type 'symbol)
+;; 	  (json-array-type 'list))
+;;   (kill-buffer buffer)
+;;   (json-read))))
+
+(defun org-habitica--format-response-from-buffer (buffer)
   "Format BUFFER data from json to a list."
-  (let ((response-buffer buffer))
-    (when (not (bufferp buffer))
-      (setq response-buffer (current-buffer)))
-    (with-current-buffer response-buffer
-      (goto-char url-http-end-of-headers)
-      (let ((json-object-type 'alist)
-	    (json-key-type 'symbol)
-	    (json-array-type 'list))
-	(setq org-habitica--response (json-read))))
-    (kill-buffer response-buffer)
-    org-habitica--response))
+  ;; (let ((response-buffer buffer))
+  (when (not (bufferp buffer))
+    ;; (setq response-buffer (current-buffer)))
+    (setq buffer (current-buffer)))
+  (with-current-buffer buffer
+    (goto-char url-http-end-of-headers)
+    ;; (message "buffer: %s" (point) (point-max))
+    (encode-coding-region (point) (point-max) 'iso-8859-1)
+    (decode-coding-region (point) (point-max) 'utf-8)
+    (let ((json-object-type 'alist)
+	  (json-key-type 'symbol)
+	  (json-array-type 'list))
+      (setq org-habitica--response (json-read))
+      ;; (setq text (org-habitica--get-from-data 'text (org-habitica--get-data-from-response org-habitica--response)))
+      ;; (message "text: %s" text)
+      ;; (message "text iso: %s" (encode-coding-string text 'iso-8859-1))
+      ;; (message "text utf: %s" (decode-coding-string text 'utf-8))
+))
+  (kill-buffer buffer)
+  org-habitica--response)
 
-(defun org-habitica--create-set-id-and-score-task (caption state source)
+(defun org-habitica--create-task-get-id (caption state notes)
+  "Create task in Habitica and return its id."
+  (org-habitica--get-from-data 'id (org-habitica--format-response-from-buffer (org-habitica--create-task caption state source))))
+
+(defun org-habitica--create-set-id-and-score-task (caption state notes)
   "Create, set returned id for org task and score up if the task is done already."
-  ;; (if (org-habitica--entry-is-neither-todo-nor-done-p state)
-      ;; (message "The state is %s. So the task should not be created." state)
-    (progn
-      (org-habitica--format-response (org-habitica--create-task caption state source))
-      (org-habitica--set-id (org-habitica--get-from-data 'id org-habitica--response))
-      (when (org-entry-is-done-p)
-	(let ((id (org-habitica--get-from-data 'id org-habitica--response)))
-	  (org-habitica--score-task id org-habitica--score-direction-up)))))
+  (let ((task-id (org-habitica--create-task-get-id caption state notes)))
+    (org-habitica--set-id task-id)
+    (if (org-habitica--entry-is-neither-todo-nor-done-p state)
+	(org-habitica--add-tag-by-name-to-task task-id state)
+      (org-habitica--score-task-by-state task-id nil state))))
 
-(defun org-habitica-search-habitica-todos-in-org ()
-  "Return how many todos are synced in org."
-  (setq all-habitica-todos (org-habitica-get-all-todos-from-habitica)))
+;; in progress
+;; (defun org-habitica-search-habitica-todos-in-org ()
+;;   "Return how many todos are synced in org."
+  ;; (setq all-habitica-todos (org-habitica-get-all-todos-from-habitica)))
+
+;; (defun org-habitica--send-request-with-user-key (method api-url-end &optional data extra-headers)
+(defun org-habitica--send-request-with-user-key (method api-url-end data &optional extra-headers)
+  "Send url request."
+  (let* ((url-request-method method)
+        (url (concat org-habitica--api-url api-url-end))
+        (url-request-extra-headers 
+	 (list (cons "Content-Type" "application/json"); charset=utf-8") 
+	   (cons "X-API-User" org-habitica-api-user) 
+	   (cons "X-API-Key" org-habitica-api-token))))
+    (when data
+      (setq json-encoded-data (json-encode data))
+      (setq url-request-data (encode-coding-string json-encoded-data 'utf-8));'iso-8859-1));'utf-8))
+      ;; (setq url-request-data (encode-coding-string json-encoded-data 'iso-8859-1))
+)
+    ;; (encode-coding-region (point) (point-max) 'iso-8859-1)
+    ;; (decode-coding-region (point) (point-max) 'utf-8)
+    ;; (if data
+    ;; 	(setq url-request-data data));(encode-coding-string (json-encode data) '
+    ;; utf-8)));locale-coding-system)))
+    (if extra-headers
+	(setq url-request-extra-headers (cons extra-headers url-request-extra-headers)))
+    ;; (url-retrieve url 'org-habitica--format-status-buffer)))
+    ;; (url-retrieve url 'org-habitica--format-response-from-buffer)))
+;format-response-from-habitica)))
+    ;; (url-retrieve url)))
+    (url-retrieve-synchronously url)))
+
+;; (defun habitrpg-refresh-status ()
+(defun habitrpg--check-status ()
+      (request
+       (concat org-habitica--api-url "/status")
+       :type "GET"
+       :parser 'json-read
+       :headers `(("Accept" . "application/json")
+		  ;; (cons "X-API-User" org-habitica-api-user) 
+		  ;; (cons "X-API-Key" org-habitica-api-token))
+		  ("X-API-User" . ,org-habitica-api-user)
+		  ("X-API-Key" . ,org-habitica-api-token))
+		  ;; ("X-API-User" . ,habitrpg-api-user)
+		  ;; ("X-API-Key" . ,habitrpg-api-token))
+       ;; :sync t
+       :success (message "success: %s" (buffer-substring-no-properties (point-min) (point-max)))
+       :error (message "error: %s" (buffer-substring-no-properties (point-min) (point-max)))
+       ;; :success (function* (lambda (&rest args &key b &allow-other-keys)   (message "success: %s" (buffer-substring-no-properties (point-min) (point-max)))))
+       ;; :error (function* (lambda (&rest args &key b &allow-other-keys) (message "error: %s" (buffer-substring-no-properties (point-min) (point-max)))))
+))
+
+(defun org-habitica--send-request (method api-url-end)
+  "Send url request without authentification."
+  (let ((url-request-method method)
+        (url (concat org-habitica--api-url api-url-end))
+        (url-request-extra-headers 
+	 ;; (list (cons "Content-Type" "text/html"))))
+	 (list (cons "Content-Type" "application/json"))))
+    ;; (url-retrieve url 'org-habitica--format-status-buffer)))
+    ;; (url-retrieve url 'org-habitica--format-response-from-buffer-if-success)))
+    ;; (url-retrieve url (lambda (status) (org-habitica--format-status-buffer)))))
+;; (message "status: %s buffer-name: %s" status (buffer-name))))));'org-habitica--format-response-from-buffer)))
+    ;; (url-retrieve url)))
+    (url-retrieve-synchronously url)))
 
 (defun org-habitica-get-all-todos-from-habitica ()
   "Get all uncompleted todos from Habitica.
-Return array of tasks."
-  (let (
-	(url-request-method "GET")
-	(url (concat org-habitica--api-url "/tasks/user"))
-	(url-request-extra-headers
-	 `(
-	   ("type" . "todos")
-	   ("Content-Type" . "application/json")
-	   ("X-API-User" . ,org-habitica-api-user)
-	   ("X-API-Key" . ,org-habitica-api-token))))
-    (url-retrieve url 'org-habitica--format-response)))
+Return response tasks."
+  (org-habitica--get-data-from-response (org-habitica--format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-get "/tasks/user" nil (cons "type" "todos"))))); fixme (type todos is in headers?)
 
 (defun org-habitica--get-task-from-habitica (id)
   "Get task from Habitica by its ID.
-Return a buffer with json response containing task's data."
-  (let (
-	(url-request-method "GET")
-	(url (concat org-habitica--api-url "/tasks/" id))
-	(url-request-extra-headers
-	 `(
-	   ("Content-Type" . "application/json")
-	   ("X-API-User" . ,org-habitica-api-user)
-	   ("X-API-Key" . ,org-habitica-api-token))))
-    (url-retrieve-synchronously url)))
+Return a buffer with json response."
+  (org-habitica--send-request-with-user-key org-habitica-request-method-get (concat "/tasks/" id) nil))
 
 (defun org-habitica--score-task (id direction)
   "Score a task with id ID up or down."
-  (let (
-	(url-request-method "POST")
-	(url (concat org-habitica--api-url "/tasks/" id "/score/" direction))
-	(url-request-extra-headers
-	 `(
-	   ("Content-Type" . "application/json")
-	   ("X-API-User" . ,org-habitica-api-user)
-	   ("X-API-Key" . ,org-habitica-api-token))))
-    (url-retrieve url 'org-habitica--format-response)))
+  (org-habitica--send-request-with-user-key org-habitica-request-method-post (concat "/tasks/" id "/score/" direction) nil))
 
 (defun org-habitica--create-task (caption state source)
   "Create task with caption CAPTION in Habitica."
-  (let (
-	(url-request-method "POST")
-	(url (concat org-habitica--api-url "/tasks/user"))
-	(url-request-extra-headers
-	 `(
-	   ("Content-Type" . "application/json")
-	   ("X-API-User" . ,org-habitica-api-user)
-	   ("X-API-Key" . ,org-habitica-api-token)))
-	(url-request-data
-	 (json-encode `(
-			("type" . "todo")
-			("text" . ,caption)
-			("notes" . ,source)))))
-    (url-retrieve-synchronously url)))
+  (let ((api-url-end "/tasks/user")
+	(request-data 
+	 (list 
+	  (cons "type" "todo") 
+	  (cons "text" caption) 
+	  (cons "notes" source))))
+    (org-habitica--send-request-with-user-key org-habitica-request-method-post api-url-end request-data)))
 
 (defun org-habitica--delete-task (id)
   "Delete a task by its ID in Habitica."
-  (let (
-	(url-request-method "DELETE")
-	(url (concat org-habitica--api-url "/tasks/" id))
-	(url-request-extra-headers
-	 `(
-	   ("Content-Type" . "application/json")
-	   ("taskId" . ,id)
-	   ("X-API-User" . ,org-habitica-api-user)
-	   ("X-API-Key" . ,org-habitica-api-token))))
-    (url-retrieve url 'org-habitica--format-response)))
+  (org-habitica--send-request-with-user-key org-habitica-request-method-delete (concat "/tasks/" id) nil (cons "taskId" id)))
 
-(defun org-habitica-login (username password)
-  "Login to Habitica."
-  (let (
-	(url-request-method "POST")
-	(url (concat org-habitica--api-url "/user/auth/local/login"))
-	(url-request-extra-headers
-	 `(
-	   ("Content-Type" . "application/json")
-	   ("username" . ,username)
-	   ("password" . ,password))))
-    (url-retrieve url 'org-habitica--format-response)))
- 
+(defun org-habitica--get-all-tags-from-habitica ()
+  "Get list of all tags from Habitica."
+  (org-habitica--get-data-from-response (org-habitica--format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-get "/tags" nil))))
 
+(defun org-habitica--get-tag-by-name (name)
+  "Get one tag by its name."
+  (let ((tags (org-habitica--get-all-tags-from-habitica))
+	id)
+    (dolist (tag tags id)
+      (when (equal (assoc-default 'name tag) name)
+	  (setq id (assoc-default 'id tag))))))
+
+(defun org-habitica--add-tag-to-task (task-id tag-id)
+  "Add a tag to a task in Habitica."
+  (let ((api-url-end (concat "/tasks/" task-id "/tags/" tag-id))
+	(request-data 
+	 (list 
+	  (cons "taskId" task-id) 
+	  (cons "tagId" tag-id))))
+    (org-habitica--send-request-with-user-key org-habitica-request-method-post api-url-end request-data)))
+
+(defun org-habitica--create-tag (name)
+  "Create tag by NAME and return tag id."
+  (org-habitica--get-from-data 'id (org-habitica--format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-post "/tags" (list (cons "name" name))))))
+
+(defun org-habitica--add-tag-by-name-to-task (task-id tag-name)
+  "Add a tag by its name to a task."
+  (let ((tag-id (org-habitica--get-tag-by-name tag-name)))
+    (if tag-id
+	(org-habitica--add-tag-to-task task-id tag-id)
+      (org-habitica--add-tag-to-task task-id (org-habitica--create-tag tag-name)))))
+
+(defun org-habitica--format-response-from-buffer-if-success (buffer)
+  "Return response from BUFFER or nil if success = :json-false."
+  (let ((response (org-habitica--format-response-from-buffer buffer)))
+    (when (org-habitica--was-response-successful-p response)
+      response)))
+
+(defun org-habitica--score-task-by-state (id habitica-completed-state org-state)
+  "Score task up or down syncing org entry state and HABITICA-COMPLETED-STATE."
+  (if (org-habitica--entry-is-neither-todo-nor-done-p org-state)
+      (org-habitica--add-tag-by-name-to-task id org-state)
+    (if (org-entry-is-done-p)
+      (when (or (equal habitica-completed-state json-false)
+		(not habitica-completed-state))
+	(org-habitica--score-task id org-habitica--score-direction-up))
+    (when (equal habitica-completed-state t)
+      (org-habitica--score-task id org-habitica--score-direction-down)))))
+
+(defun org-habitica--sync-task-with-id (id org-state)
+  "Synchronize a task with ID with Habitica."
+  ;; (let ((found-task (org-habitica--format-response-from-buffer-if-success (org-habitica--get-task-from-habitica id))))
+  (let ((found-task (org-habitica--format-response-from-buffer-if-success (org-habitica--get-task-from-habitica id))))
+    (if found-task
+	(org-habitica--score-task-by-state id (org-habitica--get-from-data 'completed found-task) org-state)
+      (org-habitica--create-set-id-and-score-task caption org-state source))))
 
 (defun org-habitica-sync-task ()
   "Synchronize an org task under point with Habitica."
   (interactive)
   (save-excursion
     (setq org-habitica--buffer (current-buffer))
-    (let (
-	  (caption (nth 4 (org-heading-components)))
+    (let ((caption (nth 4 (org-heading-components)))
 	  (state (nth 2 (org-heading-components)))
-	  (id (org-habitica--get-id-from-org))
-	  (source (buffer-name org-habitica--buffer))
-	  (tags (org-get-tags)))
-      ;; if a task was found in habitica by its ID
+	  (id (org-habitica--get-id-from-org (current-buffer)))
+	  (source (buffer-name (current-buffer))))
+	  ;; (tags (org-get-tags)))
       (if id
-	  (progn
-	    (setq org-habitica--response (org-habitica--format-response (org-habitica--get-task-from-habitica id)))
-	    (if
-		(and
-		 org-habitica--response
-		 (or
-		  (equal (org-habitica--get-error-from-response org-habitica--response) "NotFound")
-		  (equal (cdr org-habitica--response) '((error http 404)))))
-		;; A task was not found
-		(progn
-		  ;; (message "org-habitica--sync-task: task %s with id %s was not found." caption id)
-		      (org-habitica--create-set-id-and-score-task caption state source))
-	      ;; A task was found
-	      (progn
-		;; (message "task %s with id %s was found" caption id)
-		(let (
-		      (habitica-completed-state (org-habitica--get-from-data 'completed org-habitica--response)))
-		  (if (org-habitica--entry-is-neither-todo-nor-done-p state)
-		      (org-habitica--delete-task id)
-		    (if
-			(and
-			 (org-entry-is-done-p)
-			 (equal habitica-completed-state json-false))
-			(org-habitica--score-task id org-habitica--score-direction-up)
-		      (if
-			  (and
-			   (org-entry-is-todo-p)
-			   (equal habitica-completed-state t))
-			  (org-habitica--score-task id org-habitica--score-direction-down))))))))
-	;; id is nil
+	  (org-habitica--sync-task-with-id id state)
 	(if caption
 	    (org-habitica--create-set-id-and-score-task caption state source)
 	  ;; no caption
-	  (message "No caption. No task."))
-	(if (org-habitica--entry-is-neither-todo-nor-done-p state)
-	    ;; should not be created
-	    (message "The task %s should not be created." caption))))))
+	  (message "No caption. No task."))))))
+
+	
+	  
+
+
+;; (defun org-habitica-sync-task ()
+;;   "Synchronize an org task under point with Habitica."
+;;   (interactive)
+;;   (save-excursion
+;;     (setq org-habitica--buffer (current-buffer))
+;;     (let ((caption (nth 4 (org-heading-components)))
+;; 	  ;; state of the task (TODO, PROJECT)
+;; 	 (state (nth 2 (org-heading-components)))
+;; 	 (id (org-habitica--get-id-from-org))
+;; 	 (source (buffer-name org-habitica--buffer))
+;; 	 (tags (org-get-tags)))
+;;       ;; if a task was found in habitica by its ID
+;;       (if id
+;; 	  (progn
+;; 	    (setq org-habitica--response (org-habitica--format-response-from-buffer (org-habitica--get-task-from-habitica id)))
+;; 	    (if (and
+;; 		 org-habitica--response
+;; 		 (or
+;; 		  (equal (org-habitica--get-error-from-response org-habitica--response) "NotFound")
+;; 		  (equal (cdr org-habitica--response) '((error http 404)))))
+;; 		;; A task was not found
+;; 		;; (progn
+;; 		;;   (message "org-habitica--sync-task: task %s with id %s was not found." caption id)
+;; 		  (org-habitica--create-set-id-and-score-task caption state source)
+;; 	      ;; A task was found
+;; 	      (progn
+;; 		;; (message "task %s with id %s was found" caption id)
+;; 		(let ((habitica-completed-state (org-habitica--get-from-data 'completed org-habitica--response)))
+;; 		  (if (org-habitica--entry-is-neither-todo-nor-done-p state)
+;; 		      ;; instead of deleting a task, the task should get appropriate label
+;; 		      (org-habitica--delete-task id)
+;; 		      ;; (if (org-habitica--get-tag-by-name state)
+;; 		      ;; 	  ()
+;; 		      ;; ()
+;; 		    (if (and
+;; 			 (org-entry-is-done-p)
+;; 			 (equal habitica-completed-state json-false))
+;; 			(org-habitica--score-task id org-habitica--score-direction-up)
+;; 		      (if (and
+;; 			   (org-entry-is-todo-p)
+;; 			   (equal habitica-completed-state t))
+;; 			  (org-habitica--score-task id org-habitica--score-direction-down))))))))
+;; 	;; id is nil
+;; 	(if caption
+;; 	    (org-habitica--create-set-id-and-score-task caption state source)
+;; 	  ;; no caption
+;; 	  (message "No caption. No task."))
+;; 	(if (org-habitica--entry-is-neither-todo-nor-done-p state)
+;; 	    ;; should not be created
+;; 	    (message "The task %s should not be created." caption))))))
 
 (defun org-habitica--get-state ()
   "Get Org task state."
@@ -330,59 +462,56 @@ Return a buffer with json response containing task's data."
       (org-goto-sibling) ;; if this fails try (org-forward-heading-same-level)
       (outline-up-heading))) ;; TODO: think about implementation
 
-(defun org-habitica-copy-all-from-org ()
-  "Copy tasks from org file to Habitica.
-The org tasks take priority."
-  (interactive)
-  (let ((source (current-buffer)))
-    (save-excursion
-      ;; If the current item is not a task but a heading or a note
-      (goto-char (point-min)))))
+;; (defun org-habitica-copy-all-from-org ()
+;;   "Copy tasks from org file to Habitica.
+;; The org tasks take priority."
+;;   (interactive)
+;;   (let ((source (current-buffer)))
+;;     (save-excursion
+;;       ;; If the current item is not a task but a heading or a note
+;;       (goto-char (point-min)))))
+;; ;; ADD CODE here
 
-(defun org-habitica-copy-task-from-org (state)
-  "Copy an org task under point with Habitica.
-The org task takes priority."
-    (let (
-	  (caption (nth 4 (org-heading-components)))
-	  (id (org-habitica--get-id-from-org))
-	  (source (buffer-name org-habitica--buffer)))
-      (if id
-	  (progn
-	    (setq org-habitica--response (org-habitica--format-response (org-habitica--get-task-from-habitica id)))
-	    (if
-		(and
-		 org-habitica--response
-		 (or
-		  (equal (org-habitica--get-error-from-response org-habitica--response) "NotFound")
-		  (equal (cdr org-habitica--response) '((error http 404)))))
-		;; A task was not found
-		(progn
-		  ;; (message "org-habitica--sync-task: task %s with id %s was not found." caption id)
-		  (org-habitica--create-set-id-and-score-task caption state source))
-	      ;; A task was found
-	      (progn
-		;; (message "task %s with id %s was found" caption id)
-		(let (
-		      (habitica-completed-state (org-habitica--get-from-data 'completed org-habitica--response)))
-		  (if (org-habitica--entry-is-neither-todo-nor-done-p state)
-		      (org-habitica--delete-task id)
-		    (if
-			(and
-			 (org-entry-is-done-p)
-			 (equal habitica-completed-state json-false))
-			(org-habitica--score-task id org-habitica--score-direction-up)
-		      (if
-			  (and
-			   (org-entry-is-todo-p)
-			   (equal habitica-completed-state t))
-			  (org-habitica--score-task id org-habitica--score-direction-down))))))))
-	;; id is nil
-	(org-habitica--create-set-id-and-score-task caption state source))))
+;; (defun org-habitica-copy-task-from-org (state)
+;;   "Copy an org task under point with Habitica.
+;; The org task takes priority."
+;;     (let ((caption (nth 4 (org-heading-components)))
+;; 	  (id (org-habitica--get-id-from-org))
+;; 	  (source (buffer-name org-habitica--buffer)))
+;;       (if id
+;; 	  (progn
+;; 	    (setq org-habitica--response (org-habitica--format-response-from-buffer (org-habitica--get-task-from-habitica id)))
+;; 	    (if
+;; 		(and
+;; 		 org-habitica--response
+;; 		 (or
+;; 		  (equal (org-habitica--get-error-from-response org-habitica--response) "NotFound")
+;; 		  (equal (cdr org-habitica--response) '((error http 404)))))
+;; 		;; A task was not found
+;; 		(progn
+;; 		  ;; (message "org-habitica--sync-task: task %s with id %s was not found." caption id)
+;; 		  (org-habitica--create-set-id-and-score-task caption state source))
+;; 	      ;; A task was found
+;; 	      (progn
+;; 		;; (message "task %s with id %s was found" caption id)
+;; 		(let ((habitica-completed-state (org-habitica--get-from-data 'completed org-habitica--response)))
+;; 		  (if (org-habitica--entry-is-neither-todo-nor-done-p state)
+;; 		      (org-habitica--delete-task id)
+;; 		    (if (and
+;; 			 (org-entry-is-done-p)
+;; 			 (equal habitica-completed-state json-false))
+;; 			(org-habitica--score-task id org-habitica--score-direction-up)
+;; 		      (if (and
+;; 			   (org-entry-is-todo-p)
+;; 			   (equal habitica-completed-state t))
+;; 			  (org-habitica--score-task id org-habitica--score-direction-down))))))))
+;; 	;; id is nil
+;; 	(org-habitica--create-set-id-and-score-task caption state source))))
 
 
-(defun org-habitica--search-agenda (task)
-  "Search org-agenda for a TASK."
-  )
+;; (defun org-habitica--search-agenda (task)
+;;   "Search org-agenda for a TASK."
+;;   )
 
 
 ;; formerly org-tags-view from org-agenda.el
@@ -483,56 +612,47 @@ The org task takes priority."
 
 ;;; -> Functions from abrochard-habitica I need in my program
 
-(defun habitica--send-request (endpoint type data)
-  "Base function to send request to the Habitica API.
-ENDPOINT can be found in the habitica doc.
-TYPE is the type of HTTP request (GET, POST, DELETE)
-DATA is the form to be sent as x-www-form-urlencoded."
-  (let ((url  (concat org-habitica--api-url endpoint))
-        (url-request-method        type)
-        (url-request-extra-headers `(("Content-Type" . "application/x-www-form-urlencoded") ("x-api-user" . ,habitica-uid) ("x-api-key" . ,habitica-token)))
-        (url-request-data          data))
-    (with-current-buffer (url-retrieve-synchronously url)
-      (goto-char (point-min))
-      (delete-region (point-min) (string-match-p "{" (buffer-string)))
-      (assoc-default 'data (json-read-from-string (decode-coding-string
-                                                   (buffer-string)
-                                                   'utf-8))))))
-
-(defun habitica--get-profile ()
-  "Get the user's raw profile data."
-  (habitica--send-request "/user" "GET" ""))
 
 
-(defun habitica--get-tasks ()
-  "Gets all the user's tasks."
-  (habitica--send-request "/tasks/user" "GET" ""))
+
+;; (defun habitica--get-profile ()
+;;   "Get the user's raw profile data."
+;;   (org-habitica--send-request-with-user-key "/user" "GET" ""))
+
+
+;; (defun habitica--get-tasks ()
+;;   "Gets all the user's tasks."
+;;   (org-habitica--send-request-with-user-key "/tasks/user" "GET" ""))
 
 (defun habitica--parse-tasks (tasks order)
   "Parse the tasks to 'org-mode' format.
 TASKS is the list of tasks from the JSON response
 ORDER is the ordered list of ids to print the task in."
-  (dolist (id (append order nil))
-    (dolist (value (append tasks nil))
-      ;; Get a task from loop
-      (if (equal (assoc-default 'id value) id)
-	  ;; Search for a task ID in org-agenda
-	  (let* ((found (org-habitica--find-tags (concat org-habitica--id-property-name "=" "" id "")))
-		 notfoundall)
-	    (if found
-		(habitica--insert-task value)))))))
+  (let* (((tasks tasks) (order order) found notfound))
+    (dolist (id (append order nil))
+      (dolist (value (append tasks nil))
+	;; Get a task from loop
+	(if (equal (assoc-default 'id value) id)
+	    ;; Search for a task ID in org-agenda
+	    (setq found (org-habitica--find-tags (concat org-habitica--id-property-name "=" "\"" id "\""))
+		  (if found
+		      (habitica--insert-task value)
+		    (setq notfound (append notfound id))
+		    )
+		  ))))))
+  ;; notfound))
 
   ;; 	    (setq foundall (append found))
   ;; 	    (setq notfoundall (append notfoundnall id))))))
   ;; foundall)
 
-;;;###autoload
-(defun habitica-tasks ()
+;; ;;;###autoload
+(defun org-habitica-tasks ()
   "Main function to summon the habitica buffer."
-  ;; (interactive)
+  (interactive)
   ;; (if (or (not habitica-uid) (not habitica-token))
   ;;     (call-interactively 'habitica-login))
-  (switch-to-buffer "*habitica*")
+  (switch-to-buffer "*org-habitica*")
   (delete-region (point-min) (point-max))
   (org-mode)
   ;; (habitica-mode)
@@ -552,7 +672,6 @@ ORDER is the ordered list of ids to print the task in."
       ;; (habitica--parse-rewards habitica-data (assoc-default 'rewards tasksOrder))))
   ;; (org-align-all-tags)
   (org-content))))
-
 
 ;; Loop through all the tasks
 (defun habitica-sync-todos ()
@@ -591,7 +710,6 @@ TASK is the parsed JSON response."
 
 (defun habitica--insert-task (task)
   "Format the task into org mode todo heading.
-
 TASK is the parsed JSON response."
   (habitica--insert-todo task)
   (insert (assoc-default 'text task))
