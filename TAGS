@@ -1,0 +1,26 @@
+
+org-habitica.el,1141
+(defcustom org-habitica--neither-todo-nor-done-keywords 74,2666
+(defvar org-habitica--response 77,2851
+(defvar org-habitica--buffer 80,2932
+(defcustom org-habitica--api-url 83,2991
+(defcustom org-habitica-api-user 86,3069
+(defcustom org-habitica-api-token 89,3125
+(defcustom org-habitica--id-property-name 92,3180
+(defconst org-habitica--score-direction-down 95,3275
+(defconst org-habitica--score-direction-up 99,3440
+(defun org-habitica-check-access 104,3616
+(defun org-habitica--entry-is-neither-todo-nor-done-p 118,4122
+(defun org-habitica--get-from-data 125,4418
+(defun org-habitica--get-id-from-org 129,4573
+(defun org-habitica--set-id 136,4871
+(defun org-habitica--was-response-successful-p 144,5139
+(defun org-habitica--get-error-from-response 150,5307
+(defun org-habitica--format-response 155,5495
+(defun org-habitica--create-set-id-and-score-task 169,5988
+(defun org-habitica--get-task-from-habitica 180,6641
+(defun org-habitica--score-task 193,7081
+(defun org-habitica--create-task 205,7500
+(defun org-habitica--delete-task 222,8009
+(defun org-habitica-login 235,8423
+(defun org-habitica-sync-task 248,8788
