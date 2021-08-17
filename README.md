@@ -1,4 +1,5 @@
- This package provides an integration between org-mode and Habitica. When a state of a TODO task in org-mode is changed, the task gets created, its "completed" state is updated or it gets deleted from Habitica. The action depends on the final state of a task.
+# About
+This package provides an integration between org-mode and Habitica. When a state of a TODO task in org-mode is changed, the task gets created, its "completed" state is updated or it gets deleted from Habitica. The action depends on the final state of a task.
 
 # Installation
 Copy this file (org-habitica.el) to your machine.
@@ -35,9 +36,10 @@ Then get your User ID and API Token which can be found on thepage with API setti
 * "PATH-TO-YOUR-ORG-HABITICA-FILE" with your path to org-habitica.el.
 
 Finally to start using the feature reload your Emacs and type:
-
+````
  C-c h
- 
+````
  To unload the feature type:
- 
+```` 
  C-c u
+````
