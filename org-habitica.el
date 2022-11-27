@@ -23,7 +23,7 @@
 
 ;;; Commentary:
 
-;; This package provides an integration between org-mode and Habitica. When a state of a TODO task in org-mode is changed, the task gets created, its "completed" state is updated or it gets deleted from Habitica. The action depends on the final state of a task.
+;; This package provides an integration between org-mode and Habitica.  When a state of a TODO task in org-mode is changed, the task gets created, its "completed" state is updated or it gets deleted from Habitica.  The action depends on the final state of a task.
 
 ;;; Installation
 ;; Copy this file (org-habitica.el) to your machine
@@ -85,7 +85,7 @@
 (defvar org-habitica-request-method-update "UPDATE")
 (defvar org-habitica-request-method-put "PUT")
 
-(defcustom org-habitica--neither-todo-nor-done-keywords '("WAIT" "MAYBE" "HOLD" "CANCELED" "FAILED" "DELEGATED" nil)
+(defvar org-habitica--neither-todo-nor-done-keywords '("WAIT" "MAYBE" "HOLD" "CANCELED" "FAILED" "DELEGATED" nil)
   "Org states which delete a task in Habitica when switching to.")
 
 (defvar org-habitica--response nil
@@ -129,6 +129,10 @@ In Habitica it means that a todo task's state turns from TODO to DONE.")
   "Check Habitica's API status."
   (message "Connection to Habitica is %s" (org-habitica--get-from-data 'status (org-habitica--format-response-from-buffer-if-success (org-habitica--send-request org-habitica-request-method-get "/status")))))
 
+(defun org-habitica-get-member-profile ()
+  "Get a member profile."
+  (org-habitica--send-request org-habitica-request-method-get (concat "/members/" org-habitica-api-user)))
+
 (defun org-habitica--entry-is-neither-todo-nor-done-p (state)
   "Check whether the task was discarded according to its STATE."
   (member state org-habitica--neither-todo-nor-done-keywords))
@@ -138,12 +142,11 @@ In Habitica it means that a todo task's state turns from TODO to DONE.")
   (cdr (assoc 'data response)))
 
 (defun org-habitica--get-from-data (symbol response)
-
   "Extract SYMBOL from returned request RESPONSE."
   (cdr (assoc symbol (org-habitica--get-data-from-response response))))
 
 (defun org-habitica--get-id-from-org (buffer)
-  "Get id property of an org task."
+  "Get id property of an org task in BUFFER."
   (save-current-buffer
     (set-buffer buffer)
     (org-entry-get (point) org-habitica--id-property-name)))
@@ -241,12 +244,15 @@ In Habitica it means that a todo task's state turns from TODO to DONE.")
 
 (defun org-habitica-get-all-tasks-from-habitica ()
   "Get all tasks and rewards from Habitica."
-  (org-habitica--get-data-from-response (org-habitica--format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-get "/tasks/user" nil))))
+  (org-habitica--get-data-from-response (format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-get "/tasks/user" nil))))
 
-(defun org-habitica-get-all-todos-from-habitica ()
-  "Get all uncompleted todos from Habitica.
-Return response tasks."
-  (org-habitica--get-data-from-response (org-habitica--format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-get "/tasks/user" (list (cons "type" "todos")) nil))))
+(defun org-habitica-get-all-of-type-from-habitica (type)
+  "Get all of TYPE from Habitica."
+  (org-habitica--get-data-from-response (format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-get (concat "/tasks/user" "?type=" type) nil))))
+
+(defun org-habitica-create-tasks-from-response (response)
+  "Create tasks in Org Mode from RESPONSE."
+  )
 
 (defun org-habitica--get-task-from-habitica (id)
   "Get task from Habitica by its ID.
@@ -348,13 +354,14 @@ Return a buffer with json response."
   (let* ((habitica-priority-value (assoc 'priority found-task))
 	 (habitica-attribute (assoc 'attribute found-task))
 	 (priorities-equal-p (equal org-priority-value habitica-priority-value))
-	 (attributes-equal-p (equal org-attribute habitica-attribute)))
+	 (attributes-equal-p (equal org-attribute habitica-attribute))
+	 (update-data))
     (unless priorities-equal-p
       (setq update-data (list (cons "priority" org-priority-value))))
     (unless attributes-equal-p
-      (setq update-data (cons (cons "attribute" org-attribute) update-data))))
+      (setq update-data (cons (cons "attribute" org-attribute) update-data)))
   ;; (push (cons "attribute" org-attribute) update-data)))
-  update-data)
+  update-data))
 
 (defun org-habitica--sync-task-with-id (id org-state &optional caption notes priority-value attribute type habit-buttons)
   "Synchronize a task with ID, CAPTION with Habitica setting its ORG-STATE, NOTES and PRIORITY."
@@ -362,6 +369,10 @@ Return a buffer with json response."
     (if found-task
 	(org-habitica--update-task id org-state (org-habitica--get-changed-data found-task priority-value attribute) found-task)
       (org-habitica--create-set-id-and-score-task caption org-state notes priority-value attribute type))))
+
+(defun org-habitica--sync-task-with-repeat ()
+    "Synchronize with Habitica an org task under point with repeat."
+  )
 
 (defun org-habitica-sync-task ()
   "Synchronize an org task under point with Habitica."
@@ -378,12 +389,15 @@ Return a buffer with json response."
 	   (org-priority-name (car (seq-intersection org-habitica-priorities tags)))
 	   (org-priority-value (cdr (assoc org-priority-name org-habitica-priority-values)))
 	   (org-attribute (car (seq-intersection org-habitica-attributes tags))))
-      (if id
-	  (org-habitica--sync-task-with-id id org-state caption source org-priority-value org-attribute org-task-type habit-buttons)
-	(if caption
-	    (org-habitica--create-set-id-and-score-task caption org-state source org-priority-value org-attribute org-task-type habit-buttons)
-	       ;; no caption
-	  (message "No caption. No task."))))))
+      (if (org-get-repeat)
+	  ;; TODO
+	  (org-habitica--sync-task-with-repeat)
+	(if id
+	    (org-habitica--sync-task-with-id id org-state caption source org-priority-value org-attribute org-task-type habit-buttons)
+	  (if caption
+	      (org-habitica--create-set-id-and-score-task caption org-state source org-priority-value org-attribute org-task-type habit-buttons)
+	    ;; no caption
+	    (message "No caption. No task.")))))))
 
 (defun org-habitica-delete-all-todos ()
   "Delete all todos."
