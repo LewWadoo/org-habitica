@@ -91,9 +91,6 @@
 (defvar org-habitica--response nil
   "Contain the data returned by a request.")
 
-(defvar org-habitica--buffer nil
-  "Current org buffer.")
-
 (setq org-habitica-habit-buttons (list "up" "down"))
 
 (setq org-habitica-attributes (list "int" "str" "con" "per"))
@@ -147,15 +144,12 @@ In Habitica it means that a todo task's state turns from TODO to DONE.")
 
 (defun org-habitica--get-id-from-org (buffer)
   "Get id property of an org task in BUFFER."
-  (save-current-buffer
-    (set-buffer buffer)
-    (org-entry-get (point) org-habitica--id-property-name)))
+  (setq point-get (point))
+  (org-entry-get point-get org-habitica--id-property-name));)
 
-(defun org-habitica--set-id (id)
+(defun org-habitica--set-id (id &optional buffer)
   "Set ID as a property of an org task."
-  (save-current-buffer
-    (set-buffer org-habitica--buffer)
-    (org-set-property org-habitica--id-property-name id)))
+  (org-entry-put point-get org-habitica--id-property-name id));))
 
 (defun org-habitica--was-response-successful-p (response)
   "Return t if the RESPONSE was successful."
@@ -408,7 +402,7 @@ Return a buffer with json response."
 	(org-habitica-type-habit (car org-habitica-types)))
     (if habitica-task
 	(org-habitica--sync-found-recurring-task habitica-task id org-state caption source org-priority-value org-attribute org-task-type habit-buttons)
-      (let* ((new-id (org-habitica--create-task-get-id caption source org-priority-value org-attribute org-habitica-type-habit (list (car org-habitica-habit-buttons)))))
+      (let ((new-id (org-habitica--create-task-get-id caption source org-priority-value org-attribute org-habitica-type-habit (list (car org-habitica-habit-buttons)))))
 	(org-habitica--set-id new-id)
 	(org-habitica--score-task-by-state new-id nil org-state)))))
 
@@ -416,7 +410,6 @@ Return a buffer with json response."
   "Synchronize an org task under point with Habitica."
   (interactive)
   (save-excursion
-    (setq org-habitica--buffer (current-buffer))
     (let* ((caption (nth 4 (org-heading-components)))
 	   (org-state (nth 2 (org-heading-components)))
 	   (id (org-habitica--get-id-from-org (current-buffer)))

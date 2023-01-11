@@ -21,4 +21,3 @@
 (org-habitica--get-changed-data found-task-done-in-org-not-complete-in-habitica 0.1 "int")
 (org-habitica--get-priority-from-task found-task-done-in-org-not-complete-in-habitica)
 (org-habitica-delete-all-todos)
-
