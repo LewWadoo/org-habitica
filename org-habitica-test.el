@@ -1,5 +1,7 @@
 (require 'org-habitica)
 
+(org-habitica-get-all-tasks-from-habitica)
+
 (setq task-id-done-in-org-not-complete-in-habitica "8f694922-ba27-4f9f-a5a6-934236ddf479")
 (setq found-task-done-in-org-not-complete-in-habitica (org-habitica--get-task-from-habitica-by-id-and-format-response task-id-done-in-org-not-complete-in-habitica))
 

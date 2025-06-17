@@ -28,31 +28,27 @@
 ;;; Installation
 ;; Copy this file (org-habitica.el) to your machine
 
-;; Copy lines between "begin feature 'org-habitica" and "end feature 'org-habitica" to your .emacs file:
+;; Copy lines between "begin feature 'org-habitica" and "end feature 'org-habitica" to your init file:
 
 					; begin feature 'org-habitica
 ;; (add-to-list 'load-path "<PATH-TO-YOUR-ORG-HABITICA-FILE>/org-habitica/")
 
-;; (defun org-habitica-unload-feature ()
-;;   "Unload org-habitica."
-;;   (interactive)
-;;   (global-unset-key (kbd "C-c u"))
-;;   (global-unset-key (kbd "C-c C-x h"))
-;;   (unload-feature 'org-habitica)
-;;   (message "feature org-habitica unloaded"))
+(defun org-habitica-unload-feature ()
+  "Unload org-habitica."
+  (interactive)
+  (global-unset-key (kbd "C-c u"))
+  (global-unset-key (kbd "C-c C-x h"))
+  (unload-feature 'org-habitica)
+  (message "feature org-habitica unloaded"))
 
-;; (defun org-habitica-load-feature ()
-;;   "Load org-habitica."
-;;   (interactive)
-;;   (require 'org-habitica)
-;;   (global-set-key (kbd "C-c u") 'org-habitica-unload-feature)
-;;   (global-set-key (kbd "C-c C-x h") 'org-habitica-sync-task)
-;;   (add-hook 'org-after-todo-state-change-hook 'org-habitica-sync-task) ;; org-after-todo-state-change-hook is from org.el
-;;   (setq org-habitica-api-user "<PUT-YOUR-ID-HERE>")
-;;   (setq org-habitica-api-token "<PUT-YOUR-TOKEN-HERE>")
-;;   (org-habitica-check-access))
-
-;; (global-set-key (kbd "C-c h") 'org-habitica-load-feature)
+(defun org-habitica-load-feature ()
+  "Load org-habitica."
+  (interactive)
+  (require 'org-habitica)
+  (global-set-key (kbd "C-c u") 'org-habitica-unload-feature)
+  (global-set-key (kbd "C-c C-x h") 'org-habitica-sync-task)
+  (add-hook 'org-after-todo-state-change-hook 'org-habitica-sync-task) ;; org-after-todo-state-change-hook is from org.el
+  (org-habitica-check-access))
 
 					; end feature 'org-habitica
 
@@ -142,10 +138,10 @@ In Habitica it means that a todo task's state turns from TODO to DONE.")
   "Extract SYMBOL from returned request RESPONSE."
   (cdr (assoc symbol (org-habitica--get-data-from-response response))))
 
-(defun org-habitica--get-id-from-org (buffer)
-  "Get id property of an org task in BUFFER."
+(defun org-habitica--get-id-from-org ()
+  "Get id property of an org task at point."
   (setq point-get (point))
-  (org-entry-get point-get org-habitica--id-property-name));)
+  (org-entry-get point-get org-habitica--id-property-name))
 
 (defun org-habitica--set-id (id &optional buffer)
   "Set ID as a property of an org task."
@@ -412,7 +408,7 @@ Return a buffer with json response."
   (save-excursion
     (let* ((caption (nth 4 (org-heading-components)))
 	   (org-state (nth 2 (org-heading-components)))
-	   (id (org-habitica--get-id-from-org (current-buffer)))
+	   (id (org-habitica--get-id-from-org))
 	   (source (buffer-name (current-buffer)))
 	   (tags (org-get-tags))
 	   (org-task-type (car (seq-intersection org-habitica-types tags)) )
