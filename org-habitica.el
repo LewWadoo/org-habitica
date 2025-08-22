@@ -122,6 +122,11 @@ In Habitica it means that a todo task's state turns from TODO to DONE.")
   "Check Habitica's API status."
   (message "Connection to Habitica is %s" (org-habitica--get-from-data 'status (org-habitica--format-response-from-buffer-if-success (org-habitica--send-request org-habitica-request-method-get "/status")))))
 
+;;; User
+(defun org-habitica-feed-a-pet (pet food)
+  "Feed a pet."
+  (org-habitica--get-from-response 'data (org-habitica--format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-post (concat "/user/feed/" pet "/" food) nil (cons "Content-Length" "0")))))
+
 (defun org-habitica-get-member-profile ()
   "Get a member profile."
   (org-habitica--send-request org-habitica-request-method-get (concat "/members/" org-habitica-api-user)))
@@ -130,9 +135,13 @@ In Habitica it means that a todo task's state turns from TODO to DONE.")
   "Check whether the task was discarded according to its STATE."
   (member state org-habitica--neither-todo-nor-done-keywords))
 
+(defun org-habitica--get-from-response (symbol response)
+  "Extract DATA from returned request RESPONSE."
+  (cdr (assoc symbol response)))
+
 (defun org-habitica--get-data-from-response (response)
   "Extract DATA from returned request RESPONSE."
-  (cdr (assoc 'data response)))
+  (org-habitica--get-from-response 'data response))
 
 (defun org-habitica--get-from-data (symbol response)
   "Extract SYMBOL from returned request RESPONSE."

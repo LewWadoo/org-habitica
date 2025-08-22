@@ -1,5 +1,7 @@
 (require 'org-habitica)
 
+(org-habitica-feed-a-pet "Wolf-Base" "Meat")
+
 (org-habitica-get-all-tasks-from-habitica)
 
 (setq task-id-done-in-org-not-complete-in-habitica "8f694922-ba27-4f9f-a5a6-934236ddf479")
