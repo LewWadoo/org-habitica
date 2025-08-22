@@ -1,6 +1,7 @@
 (require 'org-habitica)
 
-(org-habitica-feed-a-pet "Wolf-Base" "Meat")
+(org-habitica-feed-pet "Wolf-Base" "Meat")
+(org-habitica-get-member-profile "5a284e98-af54-45d3-8280-7c5468780644")
 
 (org-habitica-get-all-tasks-from-habitica)
 

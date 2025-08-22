@@ -122,8 +122,13 @@ In Habitica it means that a todo task's state turns from TODO to DONE.")
   "Check Habitica's API status."
   (message "Connection to Habitica is %s" (org-habitica--get-from-data 'status (org-habitica--format-response-from-buffer-if-success (org-habitica--send-request org-habitica-request-method-get "/status")))))
 
+;;; Member
+(defun org-habitica-get-member-profile (member)
+  "Get a member profile."
+  (org-habitica--get-data-from-response (format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-get (concat "/members/" member) nil))))
+
 ;;; User
-(defun org-habitica-feed-a-pet (pet food)
+(defun org-habitica-feed-pet (pet food)
   "Feed a pet."
   (org-habitica--get-from-response 'data (org-habitica--format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-post (concat "/user/feed/" pet "/" food) nil (cons "Content-Length" "0")))))
 
