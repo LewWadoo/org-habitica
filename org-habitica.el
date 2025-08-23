@@ -2,7 +2,7 @@
 
 ;; Author: Evgeny Mikhaylov <lewwadoo@gmail.com>
 ;; Created: [2016-07-15]
-;; Version: 20210411
+;; Version: 20250824
 ;; Keywords: calendar
 
 ;; Copyright (c) Evgeny Mikhaylov
@@ -66,6 +66,7 @@
 ;; Requires
 (require 'json)
 (require 'org)
+(require 'url-util) ;; for `url-hexify-string'
 
 ;; Possible keys to consider:
 ;; C-c C-x u ­ add or update a task
@@ -86,6 +87,20 @@
 
 (defvar org-habitica--response nil
   "Contain the data returned by a request.")
+
+(defvar org-habitica-pet-food-map (list
+        ("Base"  . "Meat")
+        ("White" . "Milk")
+        ("Desert" . "Potatoe")
+        ("Red" . "Strawberry")
+	("Shade" . "Chocolate")
+        ("Skeleton" . "Fish")
+        ("Zombie" . "RottenMeat")
+        ("CottonCandyPink" . "CottonCandyPink")
+        ("CottonCandyBlue" . "CottonCandyBlue")
+        ("Golden" . "Honey")
+	("RoyalPurple" . "Honey")) ;; any food is favourite for RoyalPurple
+  "Alist mapping pet-type string -> food.")
 
 (setq org-habitica-habit-buttons (list "up" "down"))
 
@@ -117,31 +132,317 @@ In Habitica it means that a todo task's state turns from DONE to TODO.")
   "Positive score direction of a task.
 In Habitica it means that a todo task's state turns from TODO to DONE.")
 
+(defvar org-habitica-sell-keep-defaults
+  '((eggs . 0) (hatchingPotions . 0) (food . 0))
+  "Alist mapping item type symbol to number to keep per key when selling extras.
+Example: '((food . 10) (eggs . 0)) will keep 10 of each food, sell the rest of each food key.")
+
+;;; Member
+(defun org-habitica-get-member-profile (member)
+  "Get MEMBER profile."
+  (org-habitica--get-data-from-response (format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-get (concat "/members/" member) nil))))
+
+;;; User
+(defun org-habitica-feed-pet (pet food &optional amount)
+  "Feed PET with FOOD.  Assumes FOOD is valid (not \"any\").
+
+Optional AMOUNT is the number of food items to feed.  If non-nil, the
+request will include the query parameter \"?amount=AMOUNT\".
+AMOUNT is coerced to an integer and must be positive.
+
+Examples:
+- /user/feed/Armadillo-Shade/Chocolate
+- /user/feed/Armadillo-Shade/Chocolate?amount=9"
+  (let* ((amt (when amount (max 0 (round (string-to-number (format "%s" amount))))))
+         (pet-enc (url-hexify-string (format "%s" pet)))
+         (food-enc (url-hexify-string (format "%s" food))))
+    (when (and amount (<= amt 0))
+      (user-error "AMOUNT must be a positive integer"))
+    (let ((path (concat "/user/feed/" pet-enc "/" food-enc
+                        (when amount (concat "?amount=" (number-to-string amt))))))
+      (org-habitica--get-from-response
+       'data
+       (org-habitica--format-response-from-buffer
+        (org-habitica--send-request-with-user-key
+         org-habitica-request-method-post
+         path
+         nil
+         (cons "Content-Length" "0")))))))
+
+(defun org-habitica--sell-item-request (type key &optional amount)
+  "Send a sell request for TYPE and KEY.
+If AMOUNT is non-nil and >1, include ?amount=AMOUNT."
+  (let* ((type-str  (format "%s" type))
+         (key-str   (format "%s" key))
+         (path-base (concat "/user/sell/" (url-hexify-string type-str) "/" (url-hexify-string key-str)))
+         (path      (if (and amount (> amount 0) (> amount 1))
+                        (concat path-base "?amount=" (number-to-string amount))
+                      path-base)))
+    (condition-case err
+        (org-habitica--get-from-response
+         'data
+         (org-habitica--format-response-from-buffer
+          (org-habitica--send-request-with-user-key
+           org-habitica-request-method-post
+           path
+           nil
+           (cons "Content-Length" "0"))))
+      (error
+       (message "Error selling %s %s: %s" type-str key-str err)
+       nil))))
+
+(defun org-habitica-sell-extra-items (&optional types keep-alist dry-run)
+  "Sell extra Habitica items for TYPES according to KEEP-ALIST.
+TYPES is a list of symbols (default: (eggs hatchingPotions food)).
+KEEP-ALIST is an alist mapping type symbol to keep count per key; defaults to `org-habitica-sell-keep-defaults'.
+If DRY-RUN is non-nil, the function only logs planned sales and does not call the API.
+
+Returns a list of successful sale records of the form: (((TYPE . KEY) . AMOUNT) ...)."
+  (let* ((types (or types '(eggs hatchingPotions food)))
+         (keep-alist (or keep-alist org-habitica-sell-keep-defaults))
+         (results '()))
+    ;; retrieve snapshot for each type once and mutate the local snapshot as we sell
+    (dolist (type types)
+      (let* ((items (org-habitica-get-specific-items type)) ; alist (Name . qty)
+             (keep-default (or (cdr (assoc type keep-alist)) 0)))
+        (dolist (item items)
+          (let* ((key (format "%s" (car item)))
+                 (qty (cdr item))
+                 (keep keep-default)
+                 (to-sell (max 0 (- qty keep))))
+	    (when (and (> to-sell 0)
+		       (not (string= key "Saddle")))
+              (if dry-run
+                  (progn
+                    (message "[dry-run] Would sell %d of %s (%s)" to-sell key type)
+                    (push (cons (cons type key) to-sell) results)
+                    ;; update local snapshot in dry-run to reflect subsequent steps
+		    (setq items (org-habitica--specific-item-decrement items key to-sell)))
+                ;; perform actual sell
+                (message "Selling %d of %s (%s) ..." to-sell key type)
+                ;; call API: when to-sell == 1 call without amount arg, else include amount
+                (let ((resp (if (= to-sell 1)
+                                (org-habitica--sell-item-request type key)
+                              (org-habitica--sell-item-request type key to-sell))))
+		  (sleep-for 3)
+                  (if resp
+                      (progn
+                        (message "Sold %d of %s (%s) — server responded" to-sell key type)
+                        (push (cons (cons type key) to-sell) results)
+                        ;; decrement local snapshot so further items in this run see updated counts
+                        (setq items (org-habitica--specific-item-decrement items key to-sell)))
+                    (message "Failed to sell %s %s (attempted %d)" type key to-sell)))))))))
+    (nreverse results)))
+
 ;;;###autoload
 (defun org-habitica-check-access ()
   "Check Habitica's API status."
   (message "Connection to Habitica is %s" (org-habitica--get-from-data 'status (org-habitica--format-response-from-buffer-if-success (org-habitica--send-request org-habitica-request-method-get "/status")))))
 
-;;; Member
-(defun org-habitica-get-member-profile (member)
-  "Get a member profile."
-  (org-habitica--get-data-from-response (format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-get (concat "/members/" member) nil))))
+(defun org-habitica-get-items ()
+  "Get user items."
+  (org-habitica--get-from-response 'items (org-habitica-get-user-profile)))
+  
+(defun org-habitica--pet-type-from-name (pet)
+  "Return the pet type part from PET (string) after the last dash.
+Examples:
+- \"LionCub-Shade\"          -> \"Shade\"
+- \"BearCub-CottonCandyBlue\" -> \"CottonCandyBlue\"
+Return nil if PET is nil or not a string or contains no dash."
+  (when (and pet (stringp pet))
+    (let ((parts (split-string pet "-")))
+      (when (> (length parts) 1)
+        (car (last parts))))))
 
-;;; User
-(defun org-habitica-feed-pet (pet food)
-  "Feed a pet."
-  (org-habitica--get-from-response 'data (org-habitica--format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-post (concat "/user/feed/" pet "/" food) nil (cons "Content-Length" "0")))))
+(defun org-habitica-get-specific-items (item-symbol)
+  "Get specific type of items."
+  (org-habitica--get-from-response item-symbol (org-habitica-get-items)))
 
-(defun org-habitica-get-member-profile ()
-  "Get a member profile."
-  (org-habitica--send-request org-habitica-request-method-get (concat "/members/" org-habitica-api-user)))
+(defun org-habitica--specific-item-quantity (alist name)
+  "Return quantity of NAME in ALIST, or 0 if not present.
+ALIST entries may have keys as symbols or strings; comparison is done
+by converting keys to strings via `format'."
+  (let ((entry (cl-find name alist
+                        :key (lambda (e) (format "%s" (car e)))
+                        :test #'string=)))
+    (if entry (cdr entry) 0)))
+
+(defun org-habitica--specific-item-decrement (alist name amount)
+  "Decrease quantity of NAME in ALIST by AMOUNT and return ALIST.
+If NAME is not present, return ALIST unchanged. Ensures count doesn't go below 0.
+ALIST entries may have keys as symbols or strings."
+  (when (and alist name (> amount 0))
+    (let ((entry (cl-find name alist
+                          :key (lambda (e) (format "%s" (car e)))
+                          :test #'string=)))
+      (when entry
+        (setcdr entry (max 0 (- (cdr entry) amount))))))
+  alist)
+
+(defun org-habitica--specific-item-entry (alist name)
+  "Return the cons cell in ALIST whose car printed equals NAME, or nil."
+  (cl-find name alist
+           :key (lambda (e) (format "%s" (car e)))
+           :test #'string=))
+
+(defun org-habitica-hatch-all-possible-pets ()
+  "Attempt to hatch pets from all egg × hatching-potion combinations you have.
+
+Uses local snapshots of eggs and hatching potions (from
+`org-habitica-get-specific-items') and the list of owned pets to
+avoid re-hatching owned combinations. Decrements the local snapshots
+only after successful hatches. Returns a list of hatched pet names."
+  (let ((eggs    (org-habitica-get-specific-items 'eggs))              ; alist (Name . qty)
+        (potions (org-habitica-get-specific-items 'hatchingPotions))   ; alist (Name . qty)
+        (pets    (org-habitica-get-specific-items 'pets))              ; alist of owned pets
+        (hatched '()))
+    (dolist (egg eggs)
+      (let ((egg-name (format "%s" (car egg)))
+            (egg-qty  (cdr egg)))
+        (when (> egg-qty 0)
+          (dolist (potion potions)
+            (let ((potion-name (format "%s" (car potion)))
+                  (potion-qty  (cdr potion)))
+              (when (> potion-qty 0)
+                (let ((target-pet (format "%s-%s" egg-name potion-name)))
+                  (let* ((entry (org-habitica--specific-item-entry pets target-pet))
+			 (entry-value (cdr entry)))
+                    (cond
+                     ;; ((null entry)
+                     ;;  (message "Skipping %s: no local pet entry found" target-pet))
+                     ((not (or (equal -1 entry-value)
+			       (equal nil entry-value)))
+                      (message "Skipping %s: not eligible for hatching (value=%s)" target-pet entry-value))
+                     (t
+                      ;; eligible: attempt hatch
+                      (let ((path (concat "/user/hatch/"
+                                         (url-hexify-string egg-name) "/"
+                                         (url-hexify-string potion-name))))
+                      ;; small delay to be kind to API
+			(sleep-for 3)
+			(org-habitica--get-from-response 'data (org-habitica--format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-post path nil (cons "Content-Length" "0"))))
+                      ;; decrement local snapshots so subsequent loops use updated counts
+                      (setq eggs    (org-habitica--specific-item-decrement eggs egg-name 1))
+                      (setq potions (org-habitica--specific-item-decrement potions potion-name 1))
+                      ;; add to local pets to avoid re-hatching same combination
+		      (push (cons target-pet t) pets)
+                      (push target-pet hatched))))))))))))
+    ;; return list of hatched pet names (possibly empty)
+    (nreverse hatched)))
+
+(defun org-habitica-get-mounts ()
+  "Get user mounts."
+  (org-habitica--get-from-response 'mounts (org-habitica-get-items)))
+
+(defun org-habitica-get-pets ()
+  "Get user pets."
+  (org-habitica--get-from-response 'pets (org-habitica-get-items)))
+
+(defun org-habitica-get-food-for-pet (pet)
+  "Get appropriate meal for PET.
+
+Extract the pet type (the part after the last dash) and look it up in
+`org-habitica-pet-food-map'. If no mapping exists (or PET does not
+contain a type), return the string \"any\"."
+  (let* ((type (org-habitica--pet-type-from-name pet)))
+    (let ((food (when type
+                  (alist-get type org-habitica-pet-food-map nil nil #'string=))))
+      (or food "any"))))
+
+(require 'cl-lib)
+
+(defun org-habitica--alist-has-key-name-p (alist name)
+  "Return non-nil if ALIST contains a key whose printed name equals NAME.
+This handles keys that may be symbols or strings by comparing
+\"(format \"%s\" (car entry))\" against NAME."
+  (and alist name
+       (cl-some (lambda (entry)
+                  (string= name (format "%s" (car entry))))
+                alist)))
+
+(defconst org-habitica--preferred-food-units-per-item 5
+  "Units of pet progress gained from one preferred food item.")
+
+(defconst org-habitica--pet-max-units 50
+  "Maximum pet units at which the pet becomes a mount and is removed from pets.")
+
+(defun org-habitica-required-food-amount-from-value (pet-value &optional units-per-item max-units)
+  "Return number of preferred-food items required to raise PET-VALUE to MAX-UNITS.
+PET-VALUE may be a number or a string.  UNITS-PER-ITEM and MAX-UNITS
+default to org-habitica--preferred-food-units-per-item' and org-habitica--pet-max-units' respectively.
+
+Returns an integer (>= 0).  In normal operation this will be >= 1,
+because pets present in the list should have value < MAX-UNITS."
+  (let* ((units (or units-per-item org-habitica--preferred-food-units-per-item))
+         (maxu (or max-units org-habitica--pet-max-units))
+         (pv (if (numberp pet-value)
+                 pet-value
+               (string-to-number (format "%s" pet-value))))
+         (needed (max 0 (- maxu pv))))
+    (if (<= needed 0)
+        0
+      (ceiling (/ (float needed) units)))))
+
+(defun org-habitica-feed-all-pets ()
+  "Feed all pets.
+
+Skip a pet if the same mount is already present in mounts.
+
+For pets that are fed, compute how many preferred food items are
+needed using `org-habitica-required-food-amount-from-value' and send
+that amount to the API. If we don't have enough favourite food,
+feed the maximum available amount. The local food alist is decremented
+after each feed so later iterations use up-to-date counts. When the
+amount is 1 the API call is made without the amount query parameter."
+  (let ((pets (org-habitica-get-specific-items 'pets))
+        (mounts (org-habitica-get-specific-items 'mounts))
+        (food  (org-habitica-get-specific-items 'food))) ; local snapshot of food counts
+    (dolist (pet pets)
+      (let* ((pet-name (format "%s" (car pet)))
+             (pet-value (cdr pet)))
+        (cond
+         ((< pet-value 0)
+          (message "Skipping %s: pet is not yet hatched" pet-name))
+         ((org-habitica--alist-has-key-name-p mounts pet-name)
+          (message "Skipping %s: mount already owned" pet-name))
+         (t
+          (let ((favourite-food (org-habitica-get-food-for-pet pet-name)))
+            (if (string= favourite-food "any")
+                (message "Skipping %s: favourite food for type %s is not mapped"
+                         pet-name (org-habitica--pet-type-from-name pet-name))
+              (let* ((needed (org-habitica-required-food-amount-from-value pet-value))
+                     (available (org-habitica--specific-item-quantity food favourite-food))
+                     (to-feed (cond
+                               ((<= available 0) 0)
+                               ((<= needed available) needed)
+                               (t available)))) ; cap to what we have
+                (cond
+                 ((= to-feed 0)
+                  (message "Skipping %s: no %s available to feed" pet-name favourite-food))
+                 ((= to-feed 1)
+                  (message "Feeding %s with %s (amount=1) — using single-item API call" pet-name favourite-food)
+                  (org-habitica-feed-pet pet-name favourite-food)
+                  ;; decrement local food snapshot
+                  (setq food (org-habitica--specific-item-decrement food favourite-food 1)))
+                 (t
+		  (message "Feeding %s with %s (amount=%d) — available=%d, needed=%d"
+                           pet-name favourite-food to-feed available needed)
+                  (org-habitica-feed-pet pet-name favourite-food to-feed)
+                  ;; decrement local food snapshot
+                  (setq food (org-habitica--specific-item-decrement food favourite-food to-feed)))))
+                (sleep-for 3)))))))))
+
+
+(defun org-habitica-get-user-profile ()
+  "Get user profile."
+  (org-habitica-get-member-profile org-habitica-api-user))
 
 (defun org-habitica--entry-is-neither-todo-nor-done-p (state)
   "Check whether the task was discarded according to its STATE."
   (member state org-habitica--neither-todo-nor-done-keywords))
 
 (defun org-habitica--get-from-response (symbol response)
-  "Extract DATA from returned request RESPONSE."
+  "Extract SYMBOL from returned request RESPONSE."
   (cdr (assoc symbol response)))
 
 (defun org-habitica--get-data-from-response (response)
@@ -157,9 +458,9 @@ In Habitica it means that a todo task's state turns from TODO to DONE.")
   (setq point-get (point))
   (org-entry-get point-get org-habitica--id-property-name))
 
-(defun org-habitica--set-id (id &optional buffer)
+(defun org-habitica--set-id (id)
   "Set ID as a property of an org task."
-  (org-entry-put point-get org-habitica--id-property-name id));))
+  (org-entry-put point-get org-habitica--id-property-name id))
 
 (defun org-habitica--was-response-successful-p (response)
   "Return t if the RESPONSE was successful."
@@ -172,11 +473,6 @@ In Habitica it means that a todo task's state turns from TODO to DONE.")
   (unless (org-habitica--was-response-successful-p response)
     (assoc-default 'error response)))
 
-(defun org-habitica--format-status-buffer (status)
-  (message "debug! Buffer: %s" (buffer-substring-no-properties (point-min) (point-max)))
-  (kill-buffer (current-buffer))
-  )
-
 (defun org-habitica--format-response-from-buffer (buffer)
   "Format BUFFER data from json to a list."
   ;; (let ((response-buffer buffer))
@@ -185,7 +481,7 @@ In Habitica it means that a todo task's state turns from TODO to DONE.")
     (setq buffer (current-buffer)))
   (with-current-buffer buffer
     (goto-char url-http-end-of-headers)
-    (message "buffer: %s" (buffer-string)) ;; (point) (point-max))
+    ;; (message "buffer: %s" (buffer-string)) ;; (point) (point-max))
     (encode-coding-region (point) (point-max) 'iso-8859-1)
     (decode-coding-region (point) (point-max) 'utf-8)
     (let
@@ -235,7 +531,6 @@ In Habitica it means that a todo task's state turns from TODO to DONE.")
 	      (cons extra-headers url-request-extra-headers)
 	    url-request-extra-headers)))
     (url-retrieve-synchronously url)))
-    ;; (url-retrieve url 'org-habitica--format-status-buffer))))
     ;; (with-temp-buffer (url-retrieve-synchronously url) (json-read))))
 
 (defun org-habitica--send-request (method api-url-end)

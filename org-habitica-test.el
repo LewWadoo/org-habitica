@@ -1,7 +1,19 @@
 (require 'org-habitica)
 
-(org-habitica-feed-pet "Wolf-Base" "Meat")
-(org-habitica-get-member-profile "5a284e98-af54-45d3-8280-7c5468780644")
+(org-habitica-feed-pet "Dragon-RoyalPurple" "Honey")
+(org-habitica-feed-pet "Cactus-Desert" "Potatoe")
+(org-habitica-feed-pet "Fox-Golden" "Honey")
+(org-habitica-get-member-profile org-habitica-api-user)
+(org-habitica-get-items)
+(org-habitica-get-specific-items 'food)
+(org-habitica-get-specific-items 'pets)
+(org-habitica-get-specific-items 'mounts)
+(org-habitica-feed-all-pets)
+(org-habitica--pet-type-from-name "LionCub-Shade")
+(org-habitica-get-food-for-pet "LionCub-hade")
+(org-habitica-get-food-for-pet "LionCub-Shade")
+(org-habitica-hatch-all-possible-pets)
+(org-habitica-sell-extra-items)
 
 (org-habitica-get-all-tasks-from-habitica)
 
