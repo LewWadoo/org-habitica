@@ -107,7 +107,7 @@
 
 (setq org-habitica-attributes (list "int" "str" "con" "per"))
 
-(setq org-habitica-types (list "habit" "daily" "todo" "reward"))
+(setq org-habitica-task-type (list "habit" "daily" "todo" "reward"))
 
 (setq org-habitica-priorities (list "trivial" "easy" "medium" "hard"))
 
@@ -577,7 +577,7 @@ Return a buffer with json response."
   (let* ((api-url-end "/tasks/user")
 	(request-data 
 	 (list 
-	  (cons "type" (or type (nth 2 org-habitica-types)))
+	  (cons "type" (or type (nth 2 org-habitica-task-type)))
 	  (cons "text" (org-habitica--convert-from-org-to-markdown caption))
 	  (cons "priority" (or priority-value (org-habitica--get-priority-value-by-name (car org-habitica-priorities))))
 	  (cons "notes" notes)))
@@ -585,11 +585,11 @@ Return a buffer with json response."
 	(request-data
 	     (cons (cons "attribute" attribute) request-data))
 	(request-data
-	 (if (equal type (car org-habitica-types))
+	 (if (equal type (car org-habitica-task-type))
 	     (cons (cons "up" (not (not (member "up" habit-buttons)))) request-data)
 	   request-data))
 	(request-data
-	 (if (equal type (car org-habitica-types))
+	 (if (equal type (car org-habitica-task-type))
 	     (cons (cons "down" (not (not (member "down" habit-buttons)))) request-data)
 	   request-data)))
     (org-habitica--send-request-with-user-key org-habitica-request-method-post api-url-end request-data)))
@@ -692,8 +692,8 @@ Return a buffer with json response."
   "Synchronize with Habitica a recurring org task under point."
   (let ((habitica-task-type (org-habitica--get-from-data 'type habitica-task))
 	(habitica-completed-state (org-habitica--get-from-data 'completed habitica-task))
-	(org-habitica-type-todo (car (cddr org-habitica-types)))
-	(org-habitica-type-habit (car org-habitica-types)))
+	(org-habitica-type-todo (car (cddr org-habitica-task-type)))
+	(org-habitica-type-habit (car org-habitica-task-type)))
     (cond
 	  ((equal habitica-task-type org-habitica-type-todo)
 	   (when (equal habitica-completed-state json-false)
@@ -705,7 +705,7 @@ Return a buffer with json response."
 (defun org-habitica--sync-recurring-task (id org-state caption source org-priority-value org-attribute org-task-type habit-buttons)
   "Synchronize with Habitica a recurring org task under point."
   (let ((habitica-task (org-habitica--get-task-from-habitica-by-id-and-format-response id))
-	(org-habitica-type-habit (car org-habitica-types)))
+	(org-habitica-type-habit (car org-habitica-task-type)))
     (if habitica-task
 	(org-habitica--sync-found-recurring-task habitica-task id org-state caption source org-priority-value org-attribute org-task-type habit-buttons)
       (let ((new-id (org-habitica--create-task-get-id caption source org-priority-value org-attribute org-habitica-type-habit (list (car org-habitica-habit-buttons)))))
@@ -721,7 +721,7 @@ Return a buffer with json response."
 	   (id (org-habitica--get-id-from-org))
 	   (source (buffer-name (current-buffer)))
 	   (tags (org-get-tags))
-	   (org-task-type (car (seq-intersection org-habitica-types tags)) )
+	   (org-task-type (car (seq-intersection org-habitica-task-type tags)) )
 	   (habit-buttons (seq-intersection org-habitica-habit-buttons tags))
 	   (org-priority-name (car (seq-intersection org-habitica-priorities tags)))
 	   (org-priority-value (cdr (assoc org-priority-name org-habitica-priority-values)))
