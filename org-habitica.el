@@ -88,7 +88,8 @@
 (defvar org-habitica--response nil
   "Contain the data returned by a request.")
 
-(defvar org-habitica-pet-food-map (list
+(defvar org-habitica-pet-food-map 
+  '(
         ("Base"  . "Meat")
         ("White" . "Milk")
         ("Desert" . "Potatoe")
