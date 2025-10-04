@@ -199,6 +199,7 @@ KEEP-ALIST is an alist mapping type symbol to keep count per key; defaults to `o
 If DRY-RUN is non-nil, the function only logs planned sales and does not call the API.
 
 Returns a list of successful sale records of the form: (((TYPE . KEY) . AMOUNT) ...)."
+  (interactive)
   (let* ((types (or types '(eggs hatchingPotions food)))
          (keep-alist (or keep-alist org-habitica-sell-keep-defaults))
          (results '()))
