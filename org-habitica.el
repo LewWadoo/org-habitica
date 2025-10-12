@@ -122,6 +122,38 @@
 (defcustom org-habitica-api-token nil
   "API token.")
 
+(defcustom org-habitica-use-curl t
+  "Use curl instead of url.el for HTTP requests.
+This works around a multibyte text bug in url.el when sending
+requests with non-ASCII characters. Requires curl to be installed.
+Set to nil to use url.el instead (not recommended if you use non-ASCII text)."
+  :type 'boolean
+  :group 'org-habitica)
+
+;; Auto-load credentials from pass if not set
+(defun org-habitica--ensure-credentials ()
+  "Ensure credentials are loaded from pass if not already set."
+  (when (and (not org-habitica-api-user) (not org-habitica-api-token))
+    (condition-case nil
+        (progn
+          (require 'auth-source-pass)
+          (auth-source-pass-enable)
+          (let ((user-entry (auth-source-pass-get 'secret "Internet/habitica/user"))
+                (token-entry (auth-source-pass-get 'secret "Internet/habitica/token")))
+            (when user-entry
+              (setq org-habitica-api-user (string-trim user-entry)))
+            (when token-entry
+              (setq org-habitica-api-token (string-trim token-entry)))))
+      (error nil))))
+
+;; Configure URL library for better connectivity
+(setq url-gateway-method 'native)
+(setq url-automatic-caching nil)
+(setq url-privacy-level 'paranoid)
+
+;; Load credentials automatically
+(org-habitica--ensure-credentials)
+
 (defcustom org-habitica--id-property-name "HABITICA_ID"
   "Property id name of an org task.")
 
@@ -141,7 +173,7 @@ Example: '((food . 10) (eggs . 0)) will keep 10 of each food, sell the rest of e
 ;;; Member
 (defun org-habitica-get-member-profile (member)
   "Get MEMBER profile."
-  (org-habitica--get-data-from-response (format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-get (concat "/members/" member) nil))))
+  (org-habitica--get-data-from-response (org-habitica--format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-get (concat "/members/" member) nil))))
 
 ;;; User
 (defun org-habitica-feed-pet (pet food &optional amount)
@@ -514,42 +546,107 @@ amount is 1 the API call is made without the amount query parameter."
 	;; (org-habitica--add-tag-by-name-to-task task-id state)
       (org-habitica--score-task-by-state task-id nil state type))))
 
-(defun org-habitica--send-request-with-user-key (method api-url-end &optional data extra-headers)
-  "Send request DATA with possibly EXTRA-HEADERS by METHOD to url ending with API-URL-END."
+(defun org-habitica--send-request-with-user-key-url (method api-url-end &optional data extra-headers)
+  "Send request using url.el (may have multibyte issues with non-ASCII text)."
   (let* ((url-request-method method)
          (url (concat org-habitica--api-url api-url-end))
-	 (url-request-data
-	  (when data
-	      (encode-coding-string (json-encode data) 'utf-8)))
-         (url-request-extra-headers 
-	  (list
-	   (cons "Content-Type" "application/json")
-	   ;; (cons "Content-Length" (number-to-string (length url-request-data)))
-	   (cons "X-Client" (concat org-habitica-api-user "-org-habitica")) 
-	   (cons "X-API-User" org-habitica-api-user) 
-	   (cons "X-API-Key" org-habitica-api-token)))
-	 (url-request-extra-headers
-	  (if extra-headers
-	      (cons extra-headers url-request-extra-headers)
-	    url-request-extra-headers)))
+         (raw-data (when data 
+                     (with-temp-buffer
+                       (set-buffer-multibyte nil)
+                       (insert (encode-coding-string (json-encode data) 'utf-8))
+                       (buffer-string))))
+         (url-request-data raw-data)
+         (base-headers
+          (list
+           (cons "Content-Type" "application/json; charset=utf-8")
+           (cons "Content-Length" (number-to-string (if raw-data (length raw-data) 0)))
+           (cons "X-Client" (concat org-habitica-api-user "-org-habitica"))
+           (cons "X-API-User" org-habitica-api-user)
+           (cons "X-API-Key" org-habitica-api-token)))
+         (url-request-extra-headers
+          (if extra-headers
+              (cons extra-headers base-headers)
+            base-headers)))
     (url-retrieve-synchronously url)))
+
+(defun org-habitica--send-request-with-user-key-curl (method api-url-end &optional data extra-headers)
+  "Send request using curl (works around multibyte bug in url.el)."
+  (let* ((url (concat org-habitica--api-url api-url-end))
+         (temp-file (when data (make-temp-file "org-habitica-" nil ".json")))
+         (result-file (make-temp-file "org-habitica-response-"))
+         (curl-args
+          (append
+           (list "-X" method
+                 "-H" "Content-Type: application/json; charset=utf-8"
+                 "-H" (concat "X-Client: " org-habitica-api-user "-org-habitica")
+                 "-H" (concat "X-API-User: " org-habitica-api-user)
+                 "-H" (concat "X-API-Key: " org-habitica-api-token)
+                 "-s" ;; silent
+                 "-i" ;; include headers in output
+                 "-o" result-file)
+           (when data
+             (list "-d" (concat "@" temp-file)))
+           (when extra-headers
+             (list "-H" (format "%s: %s" (car extra-headers) (cdr extra-headers))))
+           (list url))))
+    
+    ;; Write data to temp file if present
+    (when data
+      (with-temp-file temp-file
+        (set-buffer-file-coding-system 'utf-8)
+        (insert (json-encode data))))
+    
+    ;; Execute curl
+    (unwind-protect
+        (progn
+          (let ((exit-code (apply 'call-process "curl" nil nil nil curl-args)))
+            (unless (= exit-code 0)
+              (error "curl failed with exit code %d" exit-code)))
+          
+          ;; Read response into a buffer and return it
+          (let ((response-buffer (generate-new-buffer " *habitica-response*")))
+            (with-current-buffer response-buffer
+              (insert-file-contents result-file)
+              ;; Simulate url.el's response format by setting url-http-end-of-headers
+              (goto-char (point-min))
+              (when (re-search-forward "\r?\n\r?\n" nil t)
+                (setq-local url-http-end-of-headers (point))))
+            response-buffer))
+      
+      ;; Cleanup temp files
+      (when (and temp-file (file-exists-p temp-file))
+        (delete-file temp-file))
+      (when (file-exists-p result-file)
+        (delete-file result-file)))))
+
+(defun org-habitica--send-request-with-user-key (method api-url-end &optional data extra-headers)
+  "Send request DATA with possibly EXTRA-HEADERS by METHOD to url ending with API-URL-END.
+Uses curl or url.el based on `org-habitica-use-curl' setting."
+  ;; Ensure credentials are loaded before making any API requests
+  (org-habitica--ensure-credentials)
+  (unless (and org-habitica-api-user org-habitica-api-token)
+    (error "Habitica API credentials not available"))
+  
+  (if org-habitica-use-curl
+      (org-habitica--send-request-with-user-key-curl method api-url-end data extra-headers)
+    (org-habitica--send-request-with-user-key-url method api-url-end data extra-headers)))
     ;; (with-temp-buffer (url-retrieve-synchronously url) (json-read))))
 
 (defun org-habitica--send-request (method api-url-end)
   "Send url request without authentification."
-  (let ((url-request-method method)
+  (let* ((url-request-method method)
         (url (concat org-habitica--api-url api-url-end))
         (url-request-extra-headers 
-	 (list (cons "Content-Type" "application/json"))))
+         (list (cons "Content-Type" "application/json; charset=utf-8"))))
     (url-retrieve-synchronously url)))
 
 (defun org-habitica-get-all-tasks-from-habitica ()
   "Get all tasks and rewards from Habitica."
-  (org-habitica--get-data-from-response (format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-get "/tasks/user" nil))))
+  (org-habitica--get-data-from-response (org-habitica--format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-get "/tasks/user" nil))))
 
 (defun org-habitica-get-all-of-type-from-habitica (type)
   "Get all of TYPE from Habitica."
-  (org-habitica--get-data-from-response (format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-get (concat "/tasks/user" "?type=" type) nil))))
+  (org-habitica--get-data-from-response (org-habitica--format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-get (concat "/tasks/user" "?type=" type) nil))))
 
 (defun org-habitica-create-tasks-from-response (response)
   "Create tasks in Org Mode from RESPONSE."
@@ -562,6 +659,10 @@ Return a buffer with json response."
 
 (defun org-habitica--score-task (id direction)
   "Score a task with ID up or down depending on DIRECTION."
+  ;; Ensure credentials are loaded before making API call
+  (org-habitica--ensure-credentials)
+  (unless (and org-habitica-api-user org-habitica-api-token)
+    (error "Habitica credentials not available - check pass store"))
   (org-habitica--format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-post (concat "/tasks/" id "/score/" direction) nil (cons "Content-Length" "0"))))
 
 (defun org-habitica--convert-from-org-to-markdown (text)
