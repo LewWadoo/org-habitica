@@ -1,5 +1,20 @@
 (require 'org-habitica)
 
+(org-habitica-feed-pet "Dragon-RoyalPurple" "Honey")
+(org-habitica-feed-pet "Cactus-Desert" "Potatoe")
+(org-habitica-feed-pet "Fox-Golden" "Honey")
+(org-habitica-get-member-profile org-habitica-api-user)
+(org-habitica-get-items)
+(org-habitica-get-specific-items 'food)
+(org-habitica-get-specific-items 'pets)
+(org-habitica-get-specific-items 'mounts)
+(org-habitica-feed-all-pets)
+(org-habitica--pet-type-from-name "LionCub-Shade")
+(org-habitica-get-food-for-pet "LionCub-hade")
+(org-habitica-get-food-for-pet "LionCub-Shade")
+(org-habitica-hatch-all-possible-pets)
+(org-habitica-sell-extra-items)
+
 (org-habitica-get-all-tasks-from-habitica)
 
 (setq task-id-done-in-org-not-complete-in-habitica "8f694922-ba27-4f9f-a5a6-934236ddf479")
