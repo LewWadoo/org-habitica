@@ -21,6 +21,10 @@
 
 ;;; Package-Requires: ((json "1.4") (org))
 
+(declare-function org-habitica--send-request-url-async "org-habitica" (method url headers raw-data callback))
+(declare-function org-habitica--send-request-curl-async "org-habitica" (method url headers raw-data callback))
+(declare-function org-habitica--send-request-async "org-habitica" (method api-url-end &optional callback data extra-headers))
+
 ;;; Commentary:
 
 ;; This package provides an integration between org-mode and Habitica.  When a state of a TODO task in org-mode is changed, the task gets created, its "completed" state is updated or it gets deleted from Habitica.  The action depends on the final state of a task.
@@ -633,6 +637,108 @@ Uses curl or url.el based on `org-habitica-use-curl' setting."
     ;; (with-temp-buffer (url-retrieve-synchronously url) (json-read))))
 
 (defun org-habitica--send-request (method api-url-end)
+
+
+
+;; Async HTTP functions
+(defun org-habitica--send-request-url-async (method url headers raw-data callback)
+  "Send async request using url.el."
+  (let* ((url-request-method (symbol-name method))
+         (url-request-data raw-data)
+         (url-request-extra-headers headers)
+         (url-request-method method))
+    (url-retrieve url
+                  (lambda (status)
+                    (when (buffer-live-p (current-buffer))
+                      (let ((response (buffer-string))
+                            (success (eq (plist-get status :error) nil)))
+                        (kill-buffer (current-buffer))
+                        (when callback
+                          (funcall callback success response)))))
+                  nil
+                  raw-data
+                  headers)))
+
+(defun org-habitica--send-request-curl-async (method url headers raw-data callback)
+  "Send async request using curl via start-process."
+  (let* ((temp-file (when raw-data (make-temp-file "org-habitica-" nil ".json")))
+         (result-file (make-temp-file "org-habitica-response-"))
+         (curl-args (append
+                     (list "-X" (symbol-name method)
+                           "-H" "Content-Type: application/json; charset=utf-8"
+                           "-H" (concat "X-Client: " org-habitica-api-user "-org-habitica")
+                           "-H" (concat "X-API-User: " org-habitica-api-user)
+                           "-H" (concat "X-API-Key: " org-habitica-api-token)
+                           "-s" "-i" "-o" result-file)
+                     (when raw-data (list "-d" (concat "@" temp-file)))
+                     (list url))))
+    (when raw-data
+      (with-temp-file temp-file
+        (set-buffer-file-coding-system 'utf-8)
+        (insert (json-encode data))))
+    
+    (let ((proc (apply #'start-process "org-habitica-curl" nil "curl" curl-args)))
+      (set-process-sentinel proc
+        (lambda (process event)
+          (unwind-protect
+              (when (string-match "finished" event)
+                (let* ((response-buffer (get-buffer process))
+                       (success (eq (process-exit-status process) 0))
+                       (response (when success
+                                   (with-current-buffer response-buffer
+                                     (buffer-string)))))
+                  (when (buffer-live-p response-buffer)
+                    (kill-buffer response-buffer))
+                  (when callback
+                    (funcall callback success response)))))
+          (when (and temp-file (file-exists-p temp-file))
+            (delete-file temp-file))
+          (when (file-exists-p result-file)
+            (delete-file result-file)))))
+    
+    (when raw-data
+      (with-temp-file temp-file
+        (set-buffer-file-coding-system 'utf-8)
+        (insert (json-encode data))))))
+
+(defun org-habitica--send-request-async (method api-url-end &optional callback data extra-headers)
+  "Send async HTTP request to Habitica API.
+CALLBACK is called with (success data) when complete."
+  (org-habitica--ensure-credentials)
+  (unless (and org-habitica-api-user org-habitica-api-token)
+    (when callback
+      (funcall callback nil "Habitica credentials not available"))
+    nil)
+  
+  (let* ((url (concat org-habitica--api-url api-url-end))
+         (headers (list
+                    (cons "Content-Type" "application/json; charset=utf-8")
+                    (cons "X-Client" (concat org-habitica-api-user "-org-habitica"))
+                    (cons "X-API-User" org-habitica-api-user)
+                    (cons "X-API-Key" org-habitica-api-token)))
+         (raw-data (when data
+                     (with-temp-buffer
+                       (set-buffer-multibyte nil)
+                       (insert (encode-coding-string (json-encode data) 'utf-8))
+                       (buffer-string)))))
+    (if org-habitica-use-curl
+        (org-habitica--send-request-curl-async method url headers raw-data callback)
+      (org-habitica--send-request-url-async method url headers raw-data callback))))
+
+;; Synchronous wrapper for backward compatibility
+(defun org-habitica--send-request-with-user-key (method api-url-end &optional data extra-headers)
+  "Send request DATA with possibly EXTRA-HEADERS by METHOD to url ending with API-URL-END.
+Uses curl or url.el based on `org-habitica-use-curl' setting.
+This is a synchronous wrapper around the async function."
+  (org-habitica--ensure-credentials)
+  (unless (and org-habitica-api-user org-habitica-api-token)
+    (error "Habitica API credentials not available"))
+  
+  (if org-habitica-use-curl
+      (org-habitica--send-request-with-user-key-curl method api-url-end data extra-headers)
+    (org-habitica--send-request-with-user-key-url method api-url-end data extra-headers)))
+
+
   "Send url request without authentification."
   (let* ((url-request-method method)
         (url (concat org-habitica--api-url api-url-end))
@@ -664,6 +770,59 @@ Return a buffer with json response."
   (unless (and org-habitica-api-user org-habitica-api-token)
     (error "Habitica credentials not available - check pass store"))
   (org-habitica--format-response-from-buffer (org-habitica--send-request-with-user-key org-habitica-request-method-post (concat "/tasks/" id "/score/" direction) nil (cons "Content-Length" "0"))))
+
+(defun org-habitica--score-task-async (id direction callback)
+  "Score a task with ID asynchronously.
+CALLBACK is called with (success response) when complete."
+  (org-habitica--ensure-credentials)
+  (unless (and org-habitica-api-user org-habitica-api-token)
+    (when callback
+      (funcall callback nil "Habitica credentials not available"))
+    nil)
+  (org-habitica--send-request-async
+   org-habitica-request-method-post
+   (concat "/tasks/" id "/score/" direction)
+   callback
+   nil
+   (cons "Content-Length" "0")))
+
+(defun org-habitica--create-task-async (caption &optional callback notes priority-value attribute type habit-buttons)
+  "Create task with CAPTION asynchronously.
+CALLBACK is called with (success response) when complete."
+  (let* ((priority-value (or priority-value (org-habitica--get-priority-value-by-name (car org-habitica-priorities))))
+         (api-url-end "/tasks/user")
+         (request-data 
+          (list 
+            (cons "type" (or type (nth 2 org-habitica-task-type)))
+            (cons "text" (org-habitica--convert-from-org-to-markdown caption))
+            (cons "priority" (or priority-value (org-habitica--get-priority-value-by-name (car org-habitica-priorities))))
+            (cons "notes" notes)))
+         (attribute (or attribute (cadddr org-habitica-attributes)))
+         (request-data
+          (cons (cons "attribute" attribute) request-data))
+         (request-data
+          (if (equal type (car org-habitica-task-type))
+              (cons (cons "up" (not (not (member "up" habit-buttons)))) request-data)
+            request-data))
+         (request-data
+          (if (equal type (car org-habitica-task-type))
+              (cons (cons "down" (not (not (member "down" habit-buttons)))) request-data)
+            request-data)))
+      (org-habitica--send-request-async
+       org-habitica-request-method-post
+       api-url-end
+       callback
+       request-data)))
+
+(defun org-habitica--delete-task-async (id callback)
+  "Delete a task by its ID asynchronously.
+CALLBACK is called with (success response) when complete."
+  (org-habitica--send-request-async
+   org-habitica-request-method-delete
+   (concat "/tasks/" id)
+   callback
+   nil
+   (cons "taskId" id)))
 
 (defun org-habitica--convert-from-org-to-markdown (text)
   "Convert TEXT from org to markdown."
